@@ -1,0 +1,49 @@
+image: atlassian/default-image:2
+
+pipelines:
+  branches:
+    master:
+      - step:
+          name: Update version (Pull Request to Master)
+          services:
+            - docker
+          caches:
+            - node-modules
+          script:
+            - |
+              if git log --format=%B -n 1 HEAD | grep -q "SKIP_PIPELINE"; then
+                echo "Commit message contains 'SKIP_PIPELINE', skipping pipeline."
+              else
+                git config user.email "system@docker.com"
+                git config user.name "System"
+                COMMIT_ID=$(git rev-parse --short HEAD)
+                sed -i -e "s/version:.*/version: \"$COMMIT_ID\"/" package.json
+                git add package.yaml
+
+                # Check code formatting before committing
+                npm install --global prettier eslint  # Install if needed
+                PRETTIER_RESULT=$(prettier --check "src/**/*.js" "src/**/*.jsx" "src/**/*.ts" "src/**/*.tsx" || true)
+                ESLINT_RESULT=$(eslint "src/**/*.js" "src/**/*.jsx" "src/**/*.ts" "src/**/*.tsx" --max-warnings=0 || true)
+                
+                if [[ -n $PRETTIER_RESULT || -n $ESLINT_RESULT ]]; then
+                  echo "Code formatting check failed. Please fix the issues."
+                  exit 1
+                else
+                  git commit -m "New Image version: $COMMIT_ID  << SKIP_PIPELINE >>"
+                  git push origin master
+                fi
+
+                npm install
+                
+                echo "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+                docker build -t hmashaduzzaman/pipeline-testing:$COMMIT_ID .
+                if docker push hmashaduzzaman/pipeline-testing:$COMMIT_ID; then
+                  echo "Docker image pushed successfully"
+                else
+                  echo "Docker image push failed"
+                fi
+              fi
+
+definitions:
+  caches:
+    node-modules: node_modules
